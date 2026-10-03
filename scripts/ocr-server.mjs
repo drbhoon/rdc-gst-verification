@@ -1,10 +1,12 @@
 import http from "node:http";
 import zlib from "node:zlib";
+import { fileURLToPath } from "node:url";
 import { createWorker } from "tesseract.js";
 import { PDFParse } from "pdf-parse";
 
 const PORT = 5174;
 const HOST = "127.0.0.1";
+const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 
 process.on("uncaughtException", (err) => console.error("Uncaught exception in OCR daemon:", err.message));
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection in OCR daemon:", reason));
@@ -13,7 +15,12 @@ let workerPromise = null;
 
 async function getWorker() {
   if (!workerPromise) {
-    workerPromise = createWorker("eng").catch((err) => {
+    workerPromise = createWorker("eng", 1, {
+      langPath: projectRoot,
+      cachePath: projectRoot,
+      gzip: false,
+    }).catch((err) => {
+      console.warn("Local Tesseract worker init failed:", err.message);
       workerPromise = null;
       throw err;
     });
@@ -80,7 +87,7 @@ async function tryOcrSpace(buffer, mimeType, apiKey = "helloworld") {
     form.append("scale", "true");
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 18000);
+    const timer = setTimeout(() => controller.abort(), 6000);
 
     try {
       const res = await fetch("https://api.ocr.space/parse/image", {
@@ -97,8 +104,6 @@ async function tryOcrSpace(buffer, mimeType, apiKey = "helloworld") {
         if (text.length > 20) {
           return text;
         }
-      } else {
-        console.warn(`OCR.Space Engine ${engine} HTTP ${res.status}`);
       }
     } catch (err) {
       clearTimeout(timer);
@@ -133,7 +138,7 @@ const server = http.createServer(async (req, res) => {
         const ocrApiKey = req.headers["x-ocr-api-key"] || process.env.OCR_SPACE_API_KEY || "helloworld";
         const ocrEngineReq = req.headers["x-ocr-engine"] || "auto";
 
-        // Stage 1: Digital PDF Parsing
+        // Stage 1: Digital PDF Parsing (Ultra-fast, ~20ms)
         let digitalAttachmentText = "";
         if (isPdf) {
           try {
@@ -142,8 +147,8 @@ const server = http.createServer(async (req, res) => {
             const page1Text = pdfRes?.pages?.[0]?.text?.trim() || "";
             const digitalText = pdfRes?.text?.trim() || "";
 
-            // If Page 1 contains substantial native vector digital text (> 100 chars), return it directly
-            if (page1Text.length > 100) {
+            // If Page 1 contains substantial native vector digital text (> 60 chars), return it directly
+            if (page1Text.length > 60) {
               res.setHeader("Content-Type", "application/json");
               return res.end(JSON.stringify({ text: digitalText, provider: "native-pdf" }));
             }
@@ -161,8 +166,25 @@ const server = http.createServer(async (req, res) => {
         let ocrText = "";
         let usedProvider = "rule-fallback";
 
-        // Stage 3: Cloud OCR (OCR.Space Engine 1)
-        if (ocrEngineReq !== "tesseract") {
+        // Stage 3: Local Tesseract OCR (Fast offline recognition, ~1.5 seconds)
+        // Run local OCR first to avoid slow 3rd-party network timeouts
+        if (isImage || !isPdf) {
+          try {
+            const worker = await getWorker();
+            const result = await worker.recognize(imageToOcr);
+            const localText = result?.data?.text?.trim() || "";
+            if (localText.length > 25) {
+              ocrText = localText;
+              usedProvider = "tesseract-ocr";
+            }
+          } catch (tessErr) {
+            console.warn("Tesseract worker error:", tessErr.message);
+            workerPromise = null;
+          }
+        }
+
+        // Stage 4: Cloud OCR (OCR.Space Engine 1) fallback if local OCR found nothing
+        if (!ocrText && ocrEngineReq !== "tesseract") {
           try {
             const cloudText = await tryOcrSpace(
               imageToOcr,
@@ -178,27 +200,11 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        // Stage 4: Local Tesseract OCR Daemon Fallback (Works offline with zero external dependencies)
-        if (!ocrText && (isImage || !isPdf)) {
-          try {
-            const worker = await getWorker();
-            const result = await worker.recognize(imageToOcr);
-            const localText = result?.data?.text?.trim() || "";
-            if (localText.length > 20) {
-              ocrText = localText;
-              usedProvider = "tesseract-ocr";
-            }
-          } catch (tessErr) {
-            console.warn("Tesseract worker error:", tessErr.message);
-            workerPromise = null;
-          }
-        }
-
         // Combine Page 1 OCR text with any digital attachment text (e.g. approval emails)
         const combinedText = [ocrText, digitalAttachmentText].filter(Boolean).join("\n\n");
 
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ text: combinedText, provider: ocrText ? usedProvider : "native-pdf" }));
+        res.end(JSON.stringify({ text: combinedText, provider: ocrText ? usedProvider : (digitalAttachmentText ? "native-pdf" : "rule-fallback") }));
       } catch (err) {
         console.error("OCR recognition error:", err);
         res.statusCode = 500;

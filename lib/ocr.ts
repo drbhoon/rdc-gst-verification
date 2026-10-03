@@ -137,7 +137,7 @@ export async function recognizeWithOcrSpace(
     form.append("scale", "true");
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 18000);
+    const timer = setTimeout(() => controller.abort(), 6000);
 
     try {
       const res = await fetch("https://api.ocr.space/parse/image", {
@@ -178,11 +178,17 @@ export async function recognizeText(
     if (ocrApiKey) headers["x-ocr-api-key"] = ocrApiKey;
     if (ocrEngine) headers["x-ocr-engine"] = ocrEngine;
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+
     const res = await fetch("http://127.0.0.1:5174/ocr", {
       method: "POST",
       headers,
       body: new Uint8Array(buffer),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
+
     if (res.ok) {
       const data = (await res.json()) as { text?: string; provider?: string };
       return { text: data.text || "", provider: data.provider || "tesseract-ocr" };

@@ -124,6 +124,7 @@ type OcrResponse = {
   documentId: string;
   fileName: string;
   provider: string;
+  warning?: string;
   extraction: Record<keyof Fields, { value: string | number; confidence: number }> & {
     companyResolution?: {
       companyName: string;
@@ -553,10 +554,20 @@ export function VerificationWorkspace({
     }
     setUploading(true);
     setExtraction(null);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
       const data = new FormData();
       data.set("invoice", upload);
-      const response = await fetch("/api/ocr", { method: "POST", body: data });
+      const response = await fetch("/api/ocr", {
+        method: "POST",
+        body: data,
+        headers: {
+          "x-user-email": activeAdminEmail,
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
       if (!response.ok) {
         let errMessage = `Upload failed (Status ${response.status})`;
         try {
@@ -579,12 +590,24 @@ export function VerificationWorkspace({
       setFields(extractedFields);
       setDocumentId(body.documentId);
       setExtraction(body);
-      toast.success("Invoice fields extracted", { description: "Review each field before verification." });
-    } catch (error) {
-      toast.error("Could not read invoice", {
-        description: error instanceof Error ? error.message : "Please try again",
-      });
+      if (body.warning) {
+        toast.warning("Manual review recommended", { description: body.warning });
+      } else {
+        toast.success("Invoice fields extracted", { description: "Review each field before verification." });
+      }
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error?.name === "AbortError") {
+        toast.error("Extraction timed out", {
+          description: "Reading took longer than expected. Please enter the invoice details manually.",
+        });
+      } else {
+        toast.error("Could not read invoice", {
+          description: error instanceof Error ? error.message : "Please try again",
+        });
+      }
     } finally {
+      clearTimeout(timeoutId);
       setUploading(false);
     }
   }
