@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     if (upload.type === "application/pdf") {
       try {
         const digitalPdfText = await extractDigitalTextFromPdf(fileBuffer);
-        if (digitalPdfText && digitalPdfText.trim().length > 40) {
+        if (digitalPdfText && digitalPdfText.trim().length > 40 && !digitalPdfText.startsWith("ERROR:")) {
           recognizedText = digitalPdfText.trim();
           provider = "native-pdf";
         }

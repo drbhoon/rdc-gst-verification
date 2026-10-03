@@ -104,8 +104,8 @@ export async function extractDigitalTextFromPdf(buf: Buffer): Promise<string> {
     const res = await parser.getText();
     const text = res?.text?.trim() || "";
     return text.length > 40 ? text : "";
-  } catch (err) {
-    return "ERROR: " + (err instanceof Error ? err.stack || err.message : String(err));
+  } catch {
+    return "";
   }
 }
 
