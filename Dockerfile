@@ -2,9 +2,6 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-ENV PORT=5173
-
 # Copy package descriptors
 COPY package*.json ./
 
@@ -16,6 +13,9 @@ COPY . .
 
 # Build application
 RUN npm run build
+
+ENV NODE_ENV=production
+ENV PORT=5173
 
 EXPOSE 5173
 
