@@ -9,7 +9,7 @@ ENV PORT=5173
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --include=dev
+RUN npm install
 
 # Copy all application code
 COPY . .
