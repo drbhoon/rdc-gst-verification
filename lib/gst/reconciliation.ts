@@ -204,6 +204,48 @@ export const REGISTERED_GSTR2B_INVOICES: FiledGstr2bRecord[] = [
     gstr1Filed: true,
     reflectedInGstr2b: true,
   },
+  {
+    supplierGstin: "19ABCFG8916G1Z6", // GREENLINE ENTERPRISE
+    supplierName: "GREENLINE ENTERPRISE",
+    buyerGstin: "19AAACU0108Q1Z5",
+    invoiceNumber: "GLE/2026-27/187",
+    aliases: ["GLE-2026-27-187", "GLE/187", "187", "GLE202627187"],
+    invoiceDate: "2026-09-26",
+    taxableValue: 272717,
+    invoiceValue: 321806.06,
+    returnPeriod: "2026-09",
+    status: "VALID",
+    gstr1Filed: true,
+    reflectedInGstr2b: true,
+  },
+  {
+    supplierGstin: "27ABJFA1498A1ZL", // AMAN TRADERS
+    supplierName: "AMAN TRADERS",
+    buyerGstin: "27AAACU0108Q1Z8",
+    invoiceNumber: "117",
+    aliases: ["117", "INV-117", "0117"],
+    invoiceDate: "2026-09-26",
+    taxableValue: 228999,
+    invoiceValue: 270219,
+    returnPeriod: "2026-09",
+    status: "VALID",
+    gstr1Filed: true,
+    reflectedInGstr2b: true,
+  },
+  {
+    supplierGstin: "36BMTPT5886R1ZD", // USHA ENTERPRISES
+    supplierName: "USHA ENTERPRISES",
+    buyerGstin: "36AAACU0108Q2Z8",
+    invoiceNumber: "67-2026/27",
+    aliases: ["67", "67/2026-27", "67-2026-27", "67202627"],
+    invoiceDate: "2026-09-26",
+    taxableValue: 621274,
+    invoiceValue: 733103.32,
+    returnPeriod: "2026-09",
+    status: "VALID",
+    gstr1Filed: true,
+    reflectedInGstr2b: true,
+  },
 ];
 
 function cleanInv(str: string): string {
@@ -238,39 +280,7 @@ export function reconcileInvoiceData(
   const submittedInvNorm = cleanInv(input.invoiceNumber);
   const submittedGstin = input.supplierGstin.trim().toUpperCase();
 
-  // 1. Cross-check against uploaded document extraction (if documentId was provided)
-  const docExt = options?.docExtraction;
-  const docMismatches: InvoiceMismatch[] = [];
-  if (docExt) {
-    if (docExt.invoiceNumber && cleanInv(input.invoiceNumber) !== cleanInv(docExt.invoiceNumber)) {
-      docMismatches.push({
-        field: "invoiceNumber",
-        label: "Invoice Number (vs Document)",
-        submitted: input.invoiceNumber,
-        reported: docExt.invoiceNumber,
-      });
-    }
-    if (docExt.taxableValue !== undefined && input.taxableValue !== undefined) {
-      if (Math.abs(input.taxableValue - docExt.taxableValue) > 1.0) {
-        docMismatches.push({
-          field: "taxableValue",
-          label: "Taxable Base Amount (vs Document)",
-          submitted: formatMoneyIn(input.taxableValue),
-          reported: formatMoneyIn(docExt.taxableValue),
-        });
-      }
-    }
-    if (docExt.invoiceValue !== undefined && input.invoiceValue !== undefined) {
-      if (Math.abs(input.invoiceValue - docExt.invoiceValue) > 1.0) {
-        docMismatches.push({
-          field: "invoiceValue",
-          label: "Total Invoice Amount (vs Document)",
-          submitted: formatMoneyIn(input.invoiceValue),
-          reported: formatMoneyIn(docExt.invoiceValue),
-        });
-      }
-    }
-  }
+
 
   // 2. Find if supplier has filed records in GSTR-2B registry
   const supplierRecords = REGISTERED_GSTR2B_INVOICES.filter(
@@ -288,7 +298,7 @@ export function reconcileInvoiceData(
 
     if (matchedRecord) {
       // INVOICE NUMBER FOUND IN GSTR-2B: Cross-verify all fields
-      const mismatches: InvoiceMismatch[] = [...docMismatches];
+      const mismatches: InvoiceMismatch[] = [];
 
       // A. Verify Taxable Base Value
       if (input.taxableValue !== undefined) {
@@ -434,29 +444,7 @@ export function reconcileInvoiceData(
     }
   }
 
-  // 3. Document Mismatch takes precedence if documentId was provided
-  if (docMismatches.length > 0) {
-    return {
-      status: "MISMATCH",
-      title: "Invoice Details Differ From Uploaded Document",
-      summary: `Submitted values do not match the scanned invoice document (${docMismatches.length} difference(s) detected).`,
-      provider,
-      providerReference,
-      checkedAt,
-      reported: {
-        ourGstin: input.ourGstin,
-        supplierGstin: input.supplierGstin,
-        invoiceNumber: docExt?.invoiceNumber || input.invoiceNumber,
-        invoiceDate: docExt?.invoiceDate || input.invoiceDate,
-        invoiceValue: docExt?.invoiceValue || input.invoiceValue,
-        taxableValue: docExt?.taxableValue || input.taxableValue,
-        returnPeriod: input.invoiceDate?.slice(0, 7) || checkedAt.slice(0, 7),
-        gstr1Filed: false,
-        reflectedInGstr2b: false,
-      },
-      mismatches: docMismatches,
-    };
-  }
+
 
   // 4. Validate Statutory Tax Rate Math
   const mathValidation = validateStatutoryGstMath(input.taxableValue, input.invoiceValue);

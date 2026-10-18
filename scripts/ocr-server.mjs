@@ -158,24 +158,28 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        // Stage 2: Extract embedded Page 1 image if scanned PDF
+        // Stage 2: Scanned PDF or Image handling
         const extractedImg = isPdf ? extractImageFromPdf(buffer) : null;
-        const imageToOcr = extractedImg || buffer;
-        const isImage = (imageToOcr[0] === 0xff && imageToOcr[1] === 0xd8) || (imageToOcr[0] === 0x89 && imageToOcr[1] === 0x50);
+        const isDirectImage = (buffer[0] === 0xff && buffer[1] === 0xd8) || (buffer[0] === 0x89 && buffer[1] === 0x50);
+        const imageToOcr = extractedImg || (isDirectImage ? buffer : null);
 
         let ocrText = "";
         let usedProvider = "rule-fallback";
 
-        // Stage 3: Local Tesseract OCR (Fast offline recognition, ~1.5 seconds)
-        // Run local OCR first to avoid slow 3rd-party network timeouts
-        if (isImage || !isPdf) {
+        // Stage 3: Local Tesseract OCR (Fast offline recognition)
+        // If an image is available, run local Tesseract first.
+        // We require finding at least one valid GSTIN pattern AND >= 200 chars to consider local OCR complete.
+        if (imageToOcr) {
           try {
             const worker = await getWorker();
             const result = await worker.recognize(imageToOcr);
             const localText = result?.data?.text?.trim() || "";
-            if (localText.length > 25) {
+            const hasGstin = /[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]/i.test(localText);
+            if (localText.length >= 200 && hasGstin) {
               ocrText = localText;
               usedProvider = "tesseract-ocr";
+            } else {
+              console.log(`[OCR Server] Local Tesseract produced ${localText.length} chars (hasGstin: ${hasGstin}). Falling back to Cloud OCR for full document fidelity.`);
             }
           } catch (tessErr) {
             console.warn("Tesseract worker error:", tessErr.message);
@@ -183,12 +187,13 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        // Stage 4: Cloud OCR (OCR.Space Engine 1) fallback if local OCR found nothing
+        // Stage 4: Cloud OCR (OCR.Space Engine 2 & 1) fallback
+        // Send original full buffer (PDF or Image) so OCR.Space processes all page tiles and tables.
         if (!ocrText && ocrEngineReq !== "tesseract") {
           try {
             const cloudText = await tryOcrSpace(
-              imageToOcr,
-              isImage ? (imageToOcr[0] === 0xff ? "image/jpeg" : "image/png") : (isPdf ? "application/pdf" : "image/jpeg"),
+              buffer,
+              isPdf ? "application/pdf" : (isDirectImage ? "image/jpeg" : "application/octet-stream"),
               ocrApiKey,
             );
             if (cloudText && cloudText.trim().length > 20) {

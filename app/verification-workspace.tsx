@@ -395,6 +395,18 @@ export function VerificationWorkspace({
       setChecking(true);
       setFieldErrors({});
       setResult(null);
+
+      if (!input.invoiceNumber?.trim()) {
+        setFieldErrors({
+          invoiceNumber: "Invoice number is required. The uploaded invoice is not in standard format or invoice number could not be detected. Please enter it manually.",
+        });
+        toast.error("Invoice number required", {
+          description: "Invoice is not in standard format or invoice number could not be read. Please enter it manually.",
+        });
+        setChecking(false);
+        return null;
+      }
+
       try {
         const response = await fetch("/api/verifications", {
           method: "POST",
@@ -590,7 +602,11 @@ export function VerificationWorkspace({
       setFields(extractedFields);
       setDocumentId(body.documentId);
       setExtraction(body);
-      if (body.warning) {
+      if (!extractedFields.invoiceNumber?.trim()) {
+        toast.warning("Invoice number not detected", {
+          description: "Invoice is not in standard format or invoice number could not be detected. Please enter it manually.",
+        });
+      } else if (body.warning) {
         toast.warning("Manual review recommended", { description: body.warning });
       } else {
         toast.success("Invoice fields extracted", { description: "Review each field before verification." });
@@ -1232,6 +1248,19 @@ function VerifyView(props: {
                         </Button>
                       </div>
                     </div>
+
+                    {!props.fields.invoiceNumber?.trim() && (
+                      <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-900 shadow-sm">
+                        <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600" />
+                        <div>
+                          <p className="text-sm font-semibold text-amber-950">Invoice Number Not Detected (Non-Standard Layout)</p>
+                          <p className="mt-1 text-sm text-amber-800">
+                            The document does not appear to follow a standard tax invoice layout or the invoice number could not be read with certainty. Please review the document and type the Invoice Number manually into the field below before verifying.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
                     <VerificationForm source="upload" embedded {...props} />
                   </>
                 )}

@@ -216,48 +216,24 @@ const MONTHS_MAP: Record<string, string> = {
 
 /**
  * Parses Indian currency phrases into numeric values:
+ * e.g. "Three Lakh Twenty One Thousand Eight Hundred Six Rupees and Six Paisa only" -> 321806.06
  * e.g. "Rupees Twenty One Lakh(s) Nine Thousand Fourteen Only" -> 2109014
  * e.g. "(Eighty Eight Thousand And Five Hundred Rupees Only )" -> 88500
  */
 export function parseWordsToNumber(rawText: string): number | undefined {
   const match =
-    rawText.match(/(?:Rupees?|\bINR\b|Indian\s+Rupees?)[^\n\r]{5,120}?\bOnly!?/i) ||
-    rawText.match(/\([^\n\r]*?(?:Thousand|Lakh|Crore|Hundred)[^\n\r]*?\)/i);
+    rawText.match(/\b((?:(?:INR|Rs\.?|Rupees?)\s+)?[a-z\s-]{5,140}?\b(?:Thousand|Thosuand|Lakh|Lac|Crore|Hundred)[a-z\s-]{0,60}?\b(?:Rupees?|INR)?[a-z\s-]{0,40}?\bOnly!?)/i) ||
+    rawText.match(/(?:Rupees?|\bINR\b|Indian\s+Rupees?)[^\n\r]{5,140}?\bOnly!?/i) ||
+    rawText.match(/\([^\n\r]*?(?:Thousand|Thosuand|Lakh|Lac|Crore|Hundred)[^\n\r]*?\)/i);
   if (!match) return undefined;
 
-  const clean = match[0]
-    .toLowerCase()
-    .replace(/\(s\)/g, "s")
-    .replace(/[^a-z\s]/g, " ");
+  const matchedStr = match[1] || match[0];
 
   const units: Record<string, number> = {
-    one: 1,
-    two: 2,
-    three: 3,
-    four: 4,
-    five: 5,
-    six: 6,
-    seven: 7,
-    eight: 8,
-    nine: 9,
-    ten: 10,
-    eleven: 11,
-    twelve: 12,
-    thirteen: 13,
-    fourteen: 14,
-    fifteen: 15,
-    sixteen: 16,
-    seventeen: 17,
-    eighteen: 18,
-    nineteen: 19,
-    twenty: 20,
-    thirty: 30,
-    forty: 40,
-    fifty: 50,
-    sixty: 60,
-    seventy: 70,
-    eighty: 80,
-    ninety: 90,
+    zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+    eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60,
+    seventy: 70, eighty: 80, ninety: 90,
   };
 
   const scales: Record<string, number> = {
@@ -265,29 +241,54 @@ export function parseWordsToNumber(rawText: string): number | undefined {
     crores: 10000000,
     lakh: 100000,
     lakhs: 100000,
+    lac: 100000,
+    lacs: 100000,
     thousand: 1000,
     thousands: 1000,
+    thosuand: 1000,
     hundred: 100,
     hundreds: 100,
+    hunderd: 100,
   };
 
-  const words = clean.split(/\s+/).filter(Boolean);
-  let total = 0;
-  let current = 0;
-
-  for (const w of words) {
-    if (units[w] !== undefined) {
-      current += units[w];
-    } else if (scales[w] !== undefined) {
-      current = (current === 0 ? 1 : current) * scales[w];
-      if (w !== "hundred" && w !== "hundreds") {
-        total += current;
-        current = 0;
+  const parseSection = (str: string): number => {
+    const clean = str.toLowerCase().replace(/[^a-z\s]/g, " ");
+    const words = clean.split(/\s+/).filter(Boolean);
+    let total = 0;
+    let current = 0;
+    for (const w of words) {
+      if (units[w] !== undefined) {
+        current += units[w];
+      } else if (scales[w] !== undefined) {
+        current = (current === 0 ? 1 : current) * scales[w];
+        if (w !== "hundred" && w !== "hundreds" && w !== "hunderd") {
+          total += current;
+          current = 0;
+        }
       }
     }
+    total += current;
+    return total;
+  };
+
+  const parts = matchedStr.split(/\b(?:rupees?|inr|indian\s+rupees?)\b/i);
+  let rupeePart = parts[0];
+  let paisePart = parts.length > 1 ? parts[1] : "";
+
+  // If words started with "Rupees Twenty One Lakh...", rupeePart was empty
+  if (!rupeePart.trim() && paisePart) {
+    rupeePart = paisePart;
+    paisePart = "";
   }
-  total += current;
-  return total > 0 ? total : undefined;
+
+  const rupees = parseSection(rupeePart);
+  let paise = 0;
+  if (paisePart && /(?:paisa|paise)/i.test(paisePart)) {
+    paise = parseSection(paisePart.replace(/(?:paisa|paise|only)/gi, ""));
+  }
+
+  const finalVal = rupees + Math.round(paise) / 100;
+  return finalVal > 0 ? finalVal : undefined;
 }
 
 export function parseInvoiceFields(rawText: string, fallbackFileName?: string): ExtractedInvoice {
@@ -442,14 +443,46 @@ export function parseInvoiceFields(rawText: string, fallbackFileName?: string): 
     if (clean.length < 2 || clean.length > 25) return false;
     if (isHeaderOrExcluded(clean)) return false;
     if (/\b(?:bill|way|note|mode|payment|date|doc|terms|order|shop|plot|survey)\b/i.test(clean)) return false;
+
+    // Reject Indian mobile/telephone numbers (e.g. 9440409572, 7501458188, 9491899699)
+    if (/^(?:\+?91|0)?[6-9]\d{9}$/.test(clean)) return false;
+
+    // Reject Indian postal pincodes (e.g. 500072, 731219, 400083)
+    if (/^[1-9]\d{5}$/.test(clean)) return false;
+
+    // Reject GSTIN (15 chars)
+    if (/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/i.test(clean)) return false;
+
+    // Reject PAN (10 chars)
+    if (/^[A-Z]{5}[0-9]{4}[A-Z]$/i.test(clean)) return false;
+
+    // Reject pure dates
+    if (/^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(clean) || /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(clean)) return false;
+
+    // Reject Indian bank accounts (11 to 18 digits)
+    if (/^\d{11,18}$/.test(clean)) return false;
+
+    // Reject Indian vehicle registration numbers (e.g. WB25U9241, TG08T0614, MH43CE0316)
+    if (/^[A-Z]{2}\d{1,2}[A-Z]{1,2}\d{4}$/i.test(clean)) return false;
+
+    // Reject pure HSN/SAC codes (6 to 8 digits)
+    if (/^(?:99\d{4}|[0-9]{6,8})$/.test(clean)) return false;
+
+    // Reject pure decimal monetary amounts (e.g. 135000.00, 321806.06)
+    if (/^\d+\.\d{2}$/.test(clean)) return false;
+
     if (/\s+/.test(clean)) {
-      if (/^\d+(?:\s+\d+)+$/.test(clean)) return true;
+      if (/^\d+(?:\s+\d+)+$/.test(clean)) {
+        const compact = clean.replace(/\s+/g, "");
+        if (/^(?:\+?91|0)?[6-9]\d{9}$/.test(compact) || /^[1-9]\d{5}$/.test(compact)) return false;
+        return true;
+      }
       return false;
     }
     return /^[A-Za-z0-9/_-]+$/.test(clean);
   };
 
-  // Method A: Line-by-line inspection for Invoice No / Inv No / Bill No / SI No / Sl No (supports inline and columnar Tally format)
+  // Method A: Line-by-line inspection for Invoice No / Inv No / Bill No / SI No / Sl No (supports inline and columnar multiline format)
   for (let i = 0; i < invoiceLines.length; i++) {
     const line = invoiceLines[i];
     const m = line.match(/(?:Invoice|Inv|Bill|Tax\s*Invoice|Sl\.?|Si\.?|Sr\.?|Serial)\s*(?:No|#|Number|Num)[.:\s|=-]*/i);
@@ -470,9 +503,9 @@ export function parseInvoiceFields(rawText: string, fallbackFileName?: string): 
         }
       }
 
-      // Columnar format (Tally/Busy): Value is on the next line directly under Invoice No.
-      if (i + 1 < invoiceLines.length) {
-        const nextLine = invoiceLines[i + 1];
+      // Columnar format (Tally/Busy/Multiline): Inspect up to 3 lines down under Invoice No
+      for (let k = 1; k <= 3 && i + k < invoiceLines.length; k++) {
+        const nextLine = invoiceLines[i + k];
         if (colIdx !== -1) {
           const nextTabs = nextLine.split("\t");
           if (nextTabs[colIdx]) {
@@ -495,16 +528,17 @@ export function parseInvoiceFields(rawText: string, fallbackFileName?: string): 
         }
         if (invoiceNumber) break;
       }
+      if (invoiceNumber) break;
     }
   }
 
-  // Method B: Number immediately preceding date (e.g. VRL/26-27/0392\n28-Apr-2026)
+  // Method B: Number adjacent to date on same line or separated by newline
   if (!invoiceNumber) {
-    const numBeforeDate = invoiceSection.match(
-      /\b([A-Za-z0-9/-]{3,24})\s*[\r\n]+\s*(\d{1,2}[-/ ][A-Za-z]{3}[-/ ]\d{2,4})\b/i,
-    );
-    if (numBeforeDate) {
-      const cand = cleanCandidate(numBeforeDate[1]);
+    const sameLineOrNext =
+      invoiceSection.match(/\b([A-Za-z0-9/_-]{3,24})[\t\s|]+(?:Dated?\s*[:.-]*)?(\d{1,2}[-/.|]\d{1,2}[-/.|]\d{2,4})\b/i) ||
+      invoiceSection.match(/\b([A-Za-z0-9/-]{3,24})\s*[\r\n]+\s*(\d{1,2}[-/ ][A-Za-z]{3}[-/ ]\d{2,4})\b/i);
+    if (sameLineOrNext) {
+      const cand = cleanCandidate(sameLineOrNext[1]);
       if (isValidInvoiceNo(cand)) {
         invoiceNumber = cand;
         invoiceNoConfidence = 0.98;
@@ -512,9 +546,9 @@ export function parseInvoiceFields(rawText: string, fallbackFileName?: string): 
     }
   }
 
-  // Method C: Colon match (e.g. Invoice : 042)
+  // Method C: Colon match (e.g. Invoice : 042 or Invoice No:67-2026/27)
   if (!invoiceNumber) {
-    const colonMatch = invoiceSection.match(/(?:Tax\s*Invoice|Invoice|Inv|Bill)\s*[:|=-]+\s*([A-Za-z0-9/_-]+)/i);
+    const colonMatch = invoiceSection.match(/(?:Tax\s*Invoice|Invoice|Inv|Bill)\s*(?:No|#)?\s*[:|=-]+\s*([A-Za-z0-9/_-]+)/i);
     if (colonMatch) {
       const cand = cleanCandidate(colonMatch[1]);
       if (isValidInvoiceNo(cand)) {
@@ -539,10 +573,11 @@ export function parseInvoiceFields(rawText: string, fallbackFileName?: string): 
     }
   }
 
-  // Method E: Standalone No. X in invoice section
+  // Method E: Standalone No. X in invoice section (strictly excluding phone, mobile, cell, etc.)
   if (!invoiceNumber) {
     for (const l of invoiceLines) {
-      if (!/(?:SAC|HSN|SR|SERIAL|ORDER|ACCOUNT|A\/C|MOB|PHONE|TEL|PLOT|SECTOR|ROAD|DELIVERY|WAY|BILL|SHOP|FLAT|SURVEY)\s*NO/i.test(l)) {
+      if (!/(?:SAC|HSN|SR|SERIAL|ORDER|ACCOUNT|A\/C|MOB|MOBILE|CELL|PHONE|PH|TEL|PLOT|SECTOR|ROAD|DELIVERY|WAY|BILL|SHOP|FLAT|SURVEY|CONTACT|FAX|PIN|PINCODE|PAN|GST|GSTIN)\s*NO/i.test(l)) {
+        if (/(?:CELL|MOBILE|PHONE|CONTACT|TEL)[.:\s|=-]*\d/i.test(l)) continue;
         const m = l.match(/\b(?:No|#)[.:\s|=-]+([A-Za-z0-9/_-]+)/i);
         if (m) {
           const firstLine = m[1].trim().split(/[\t\r\n]/)[0].trim();
@@ -708,7 +743,7 @@ export function parseInvoiceFields(rawText: string, fallbackFileName?: string): 
   if (!invoiceValue) {
     const gtMatch =
       invoiceSection.match(/(?:Grand\s*Total|Invoice\s*Total|Bill\s*Amount|Total\s*Invoice\s*Value)[^\d\n]*([0-9,]+(?:\.[0-9S]{2})?)/i) ||
-      invoiceSection.match(/(?:Grand\s*Total|Invoice\s*Total|Bill\s*Amount|Total\s*Invoice\s*Value|Total)[^\n]*[¥₹]\s*([0-9,]+(?:\.[0-9S]{2})?)/i) ||
+      invoiceSection.match(/(?:Grand\s*Total|Invoice\s*Total|Bill\s*Amount|Total\s*Invoice\s*Value|Sub\s*Total|\bTotal)[^\n]*[¥₹\uFFE5き‡Rs\.]\s*([0-9,]+(?:\.[0-9S]{2})?)/i) ||
       invoiceSection.match(/\b(?:TOTAL|GRAND\s*TOTAL)[^\n]*?([0-9]{3,7}(?:\.[0-9S]{2})?L?)\b/i);
     if (gtMatch) {
       const rawVal = gtMatch[1].replace(/,/g, "").replace(/S/g, "5").replace(/L$/i, "").replace(/[/-]+$/, "");
@@ -736,7 +771,7 @@ export function parseInvoiceFields(rawText: string, fallbackFileName?: string): 
 
   // Method E: Statutory Pair Reconciliation from invoice section
   // If either invoiceValue or taxableValue is still missing or unverified,
-  // find a pair (base, total) that satisfies base * (1 + rate) == total for standard GST rates (18%, 12%, 5%, 28%, 3%)
+  // find statutory pairs (base, total) that satisfy base * (1 + rate) == total for standard GST rates (18%, 12%, 5%, 28%, 3%)
   const candidateAmounts = [...invoiceSection.matchAll(/\b(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.[0-9S]{1,2})?L?\b/gi)]
     .map((m) => m[0].replace(/L$/i, "").replace(/,/g, "").replace(/S/g, "5"))
     .map(Number)
@@ -744,29 +779,57 @@ export function parseInvoiceFields(rawText: string, fallbackFileName?: string): 
 
   if (candidateAmounts.length >= 2) {
     const TAXED_RATES = [0.18, 0.12, 0.05, 0.28, 0.03];
-    let statutoryPair: { base: number; total: number } | null = null;
+    const validPairs: Array<{ base: number; total: number; rate: number }> = [];
 
     for (const total of candidateAmounts) {
       for (const base of candidateAmounts) {
         if (base >= total * 0.5 && base < total) {
           for (const r of TAXED_RATES) {
             if (Math.abs(base * (1 + r) - total) < 2.5) {
-              statutoryPair = { base, total };
+              validPairs.push({ base, total, rate: r });
               break;
             }
           }
-          if (statutoryPair) break;
         }
       }
-      if (statutoryPair) break;
     }
 
-    if (statutoryPair) {
-      if (!invoiceValue || !taxableValue || invoiceValue === taxableValue || Math.abs(invoiceValue - statutoryPair.total) > 2.5 || valConfidence < 0.98) {
-        invoiceValue = statutoryPair.total;
-        taxableValue = statutoryPair.base;
+    if (validPairs.length > 0) {
+      // Sort pairs by total descending so Grand Total precedes individual line items
+      validPairs.sort((a, b) => b.total - a.total);
+
+      if (invoiceValue) {
+        // If invoiceValue is already known (e.g. from words or Grand Total), match corresponding base
+        const matchingPair = validPairs.find((p) => Math.abs(p.total - invoiceValue!) < 2.5);
+        if (matchingPair) {
+          taxableValue = matchingPair.base;
+          valConfidence = 0.99;
+        }
+      } else {
+        // Otherwise choose the pair with the maximum total (the true invoice total)
+        const highestPair = validPairs[0];
+        invoiceValue = highestPair.total;
+        taxableValue = highestPair.base;
         valConfidence = 0.99;
       }
+    }
+  }
+
+  // Check if multiple line items sum to the statutory taxable base of the invoice
+  if (invoiceValue && (!taxableValue || taxableValue < invoiceValue * 0.5 || taxableValue > invoiceValue)) {
+    const candidateNums = candidateAmounts.filter((n) => n < invoiceValue! && n >= 1000);
+    for (let i = 0; i < candidateNums.length; i++) {
+      for (let j = i + 1; j < candidateNums.length; j++) {
+        const sumBase = candidateNums[i] + candidateNums[j];
+        if (sumBase >= invoiceValue * 0.5 && sumBase <= invoiceValue) {
+          if (STATUTORY_RATES.some((r) => Math.abs(sumBase * (1 + r) - invoiceValue!) < 2.5)) {
+            taxableValue = sumBase;
+            valConfidence = 0.98;
+            break;
+          }
+        }
+      }
+      if (taxableValue) break;
     }
   }
 
